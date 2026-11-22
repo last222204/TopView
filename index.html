@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>게임 프로토</title>
 <meta name="description" content="탑뷰 액션 프로토타입">
 <meta property="og:type" content="website">
@@ -102,6 +102,16 @@ const dec=document.createElement('canvas'); dec.width=W*DEC_K; dec.height=H*DEC_
 const dctx=dec.getContext('2d');
 dctx.setTransform(DEC_K,0,0,DEC_K,0,0);
 const OPT={gore:true,snd:true,bgm:true,pow:1.5};
+const MOBILE=(window.matchMedia&&window.matchMedia('(pointer: coarse)').matches)
+  ||('ontouchstart' in window)||navigator.maxTouchPoints>0;
+const STICK={cx:132,cy:H-126,r:74,kr:31};
+const BTN_D={x:W-116,y:H-126,r:50,label:'회피'};
+const BTN_F={x:W-212,y:H-74,r:36,label:'F'};
+const HIT_MENU={x:W-150,y:10,w:140,h:32};
+const HIT_INV ={x:W-170,y:54,w:160,h:32};
+const stick={id:null,active:false,cx:STICK.cx,cy:STICK.cy,x:STICK.cx,y:STICK.cy};
+function inCircle(q,c,pad){ return Math.hypot(q.x-c.x,q.y-c.y)<c.r+(pad||0); }
+function inRect(q,r){ return q.x>=r.x&&q.x<=r.x+r.w&&q.y>=r.y&&q.y<=r.y+r.h; }
 const el=id=>document.getElementById(id);
 const menuEl=el('menu');
 let menuOpen=false;
@@ -564,16 +574,42 @@ function at(ev){const r=cv.getBoundingClientRect();
 cv.addEventListener('pointerdown',e=>{
   if(menuOpen||invOpen) return;
   e.preventDefault(); audio(); syncMusic();
+  const q=at(e);
+  if(MOBILE){
+    if(inRect(q,HIT_MENU)){ setMenu(true); return; }
+    if(inRect(q,HIT_INV)&&S.phase!=='intro'){ setInv(true); return; }
+  }
   if(S.over){init(true);syncMusic();return;}
   if(S.phase==='note'){ tryInteract(); return; }
+  if(MOBILE){
+    if(inCircle(q,BTN_D,12)){ tryDash(); return; }
+    if(inCircle(q,BTN_F,12)){ tryInteract(); return; }
+    if(q.x<W*0.52){                      // 왼쪽 — 떠다니는 이동 패드
+      stick.id=e.pointerId; stick.active=true;
+      stick.cx=clamp(q.x,STICK.r+10,W*0.52-10);
+      stick.cy=clamp(q.y,STICK.r+10,H-STICK.r-10);
+      stick.x=q.x; stick.y=q.y;
+      cv.setPointerCapture(e.pointerId);
+      return;
+    }
+    tryInteract();                        // 오른쪽 빈 곳 터치 = F
+    return;
+  }
   const now=performance.now();
   if(now-lastTap<260) tryDash();
   lastTap=now;
-  drag=at(e); cv.setPointerCapture(e.pointerId);
+  drag=q; cv.setPointerCapture(e.pointerId);
 });
-cv.addEventListener('pointermove',e=>{if(drag)drag=at(e);});
-cv.addEventListener('pointerup',()=>drag=null);
-cv.addEventListener('pointercancel',()=>drag=null);
+cv.addEventListener('pointermove',e=>{
+  if(MOBILE){ if(stick.id===e.pointerId){ const q=at(e); stick.x=q.x; stick.y=q.y; } return; }
+  if(drag)drag=at(e);
+});
+function endPtr(e){
+  if(MOBILE&&stick.id===e.pointerId){ stick.id=null; stick.active=false; }
+  drag=null;
+}
+cv.addEventListener('pointerup',endPtr);
+cv.addEventListener('pointercancel',endPtr);
 
 /* ===== 생성 ===== */
 function spawnEnemy(ring){
@@ -879,7 +915,11 @@ function tryDash(){
   if(keys['w']||keys['arrowup'])my-=1;
   if(keys['s']||keys['arrowdown'])my+=1;
   if(mx||my){const L=Math.hypot(mx,my);dx=mx/L;dy=my/L;}
-  else if(drag){const ax=drag.x-p.x,ay=drag.y-p.y,L=Math.hypot(ax,ay);
+  else if(MOBILE&&stick.active){
+    const ax=stick.x-stick.cx,ay=stick.y-stick.cy,L=Math.hypot(ax,ay);
+    if(L>10){dx=ax/L;dy=ay/L;}
+  }
+  else if(!MOBILE&&drag){const ax=drag.x-p.x,ay=drag.y-p.y,L=Math.hypot(ax,ay);
     if(L>8){dx=ax/L;dy=ay/L;}}
   dashId++;
   p.dash={t:0,dur:0.145,dx,dy,id:dashId};
@@ -1185,7 +1225,11 @@ function update(dt){
       if(keys['d']||keys['arrowright'])mx+=1;
       if(keys['w']||keys['arrowup'])my-=1;
       if(keys['s']||keys['arrowdown'])my+=1;
-      if(!mx&&!my&&drag){
+      if(!mx&&!my&&MOBILE&&stick.active){
+        const dx=stick.x-stick.cx, dy=stick.y-stick.cy, L=Math.hypot(dx,dy);
+        if(L>10){ const n=Math.min(1,L/STICK.r); mx=(dx/L)*n; my=(dy/L)*n; }
+      }
+      if(!mx&&!my&&!MOBILE&&drag){
         const dx=drag.x-p.x,dy=drag.y-p.y,L=Math.hypot(dx,dy);
         if(L>6){mx=dx/L;my=dy/L;}
       }
@@ -1222,7 +1266,7 @@ function update(dt){
       if(S.tut.dashed){ M.step=2; M.t=0; sfx.pickup(); S.msg='참 잘했어요'; S.msgT=2.6; }
     }else{
       M.t+=d;
-      if(M.t>0.8) beginCut();
+      if(M.t>3.0) beginCut();
     }
     for(const n of S.npcs)n.ph+=d*1.5;
     updateCorpses(dt); updateParts(d); decay(dt);
@@ -1904,14 +1948,14 @@ function render(){
     ctx.fillText(first?'1.  여기까지 이동하시오':'2.  빠른 이동을 하시오',W/2,62);
     ctx.font=fUI(18);
     ctx.fillStyle='rgba(74,86,100,0.72)';
-    ctx.fillText(first?'W   A   S   D':'S P A C E',W/2,92);
+    ctx.fillText(MOBILE?(first?'왼쪽 화면을 끌어서':'회피 버튼'):(first?'W   A   S   D':'S P A C E'),W/2,92);
   }
   if(S.phase!=='cut'){
     ctx.textAlign='right';
     ctx.font=fUI(13);
     ctx.fillStyle=dim?'rgba(140,150,162,0.6)':'rgba(84,96,110,0.62)';
-    ctx.fillText('메뉴  [ESC]',W-20,30);
-    if(S.phase!=='intro') ctx.fillText('인벤토리  [I]',W-20,74);
+    ctx.fillText(MOBILE?'메뉴':'메뉴  [ESC]',W-20,30);
+    if(S.phase!=='intro') ctx.fillText(MOBILE?'인벤토리':'인벤토리  [I]',W-20,74);
   }
   if((S.phase==='survive'||S.phase==='reveal')&&!S.over){
     ctx.textAlign='left'; ctx.font=fUI(13);
@@ -2005,6 +2049,9 @@ function render(){
     ctx.globalAlpha=1;
   }
 
+  if(MOBILE&&!S.over&&S.phase!=='cut'&&S.phase!=='note'&&S.phase!=='death'){
+    drawTouchUI();
+  }
   if(S.over){
     // 시체는 보여야 한다 — 가운데를 비운 암전
     const og=ctx.createRadialGradient(W/2,H*0.42,20,W/2,H*0.42,H*0.72);
@@ -2016,10 +2063,46 @@ function render(){
     ctx.fillStyle='#c6cfd9'; ctx.font=fBIG(44);
     ctx.fillText('당신은 죽었습니다',W/2,H*0.80);
     ctx.fillStyle='rgba(158,168,180,0.8)'; ctx.font=fUI(17);
-    ctx.fillText('다시하기   [ F ]',W/2,H*0.80+40);
+    ctx.fillText(MOBILE?'화면을 눌러 다시하기':'다시하기   [ F ]',W/2,H*0.80+40);
   }
 }
 fit();
+function drawTouchUI(){
+  const dim=tone.t>0.5;
+  const line=dim?'rgba(206,216,228,':'rgba(60,72,86,';
+  // 이동 패드
+  const sx=stick.active?stick.cx:STICK.cx, sy=stick.active?stick.cy:STICK.cy;
+  ctx.lineWidth=2.4;
+  ctx.strokeStyle=line+(stick.active?0.42:0.22)+')';
+  ctx.beginPath(); ctx.arc(sx,sy,STICK.r,0,6.283); ctx.stroke();
+  let kx=sx,ky=sy;
+  if(stick.active){
+    const dx=stick.x-sx,dy=stick.y-sy,L=Math.hypot(dx,dy);
+    const m=Math.min(L,STICK.r-STICK.kr*0.6)||0;
+    if(L>0.001){ kx=sx+(dx/L)*m; ky=sy+(dy/L)*m; }
+  }
+  ctx.fillStyle=line+(stick.active?0.26:0.13)+')';
+  ctx.beginPath(); ctx.arc(kx,ky,STICK.kr,0,6.283); ctx.fill();
+  ctx.strokeStyle=line+(stick.active?0.5:0.26)+')';
+  ctx.beginPath(); ctx.arc(kx,ky,STICK.kr,0,6.283); ctx.stroke();
+  // 버튼
+  const btn=(b,fs,ready)=>{
+    ctx.fillStyle=line+(ready?0.16:0.07)+')';
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,6.283); ctx.fill();
+    ctx.strokeStyle=line+(ready?0.46:0.2)+')';
+    ctx.lineWidth=2.4;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,6.283); ctx.stroke();
+    ctx.fillStyle=line+(ready?0.78:0.3)+')';
+    ctx.font=fUI(fs); ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(b.label,b.x,b.y);
+    ctx.textBaseline='alphabetic';
+  };
+  const p=S.player;
+  btn(BTN_D,15,p.dcharge>0);
+  const objNear=S.obj&&S.phase==='survive'
+    &&Math.hypot(S.obj.x-p.x,S.obj.y-p.y)<74;
+  btn(BTN_F,16,!!objNear);
+}
 let last=performance.now();
 function loop(now){
   const dt=Math.min(0.05,(now-last)/1000); last=now;
